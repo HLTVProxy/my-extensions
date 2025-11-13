@@ -1,0 +1,265 @@
+Karate 無痕模式與連接現有瀏覽器對話記錄
+=============================================
+
+日期: 2025年11月13日
+
+---
+
+問題 1: 如何在 Karate 中讓瀏覽器以私密模式打開？
+---
+
+回答:
+在 Karate 中,可以透過設定 Chrome 或其他瀏覽器的啟動參數來啟用私密模式。
+
+方法 1: 在 Feature 檔案中設定
+```gherkin
+Feature: 使用私密模式測試
+
+Background:
+  * configure driver = { type: 'chrome', addOptions: ['--incognito'] }
+  
+Scenario: 你的測試場景
+  Given driver 'https://example.com'
+  # 你的測試步驟
+```
+
+方法 2: 在 karate-config.js 中全域設定
+```javascript
+function fn() {
+  var config = {
+    baseUrl: 'https://your-app.com'
+  };
+  
+  // 設定瀏覽器以私密模式啟動
+  karate.configure('driver', { 
+    type: 'chrome',
+    addOptions: ['--incognito']
+  });
+  
+  return config;
+}
+```
+
+方法 3: 針對不同瀏覽器
+- Chrome/Chromium: addOptions: ['--incognito']
+- Edge: addOptions: ['--inprivate']
+- Firefox: addOptions: ['-private']
+
+方法 4: 使用完整的 WebDriver 配置
+```gherkin
+Background:
+  * def options = 
+    """
+    {
+      type: 'chrome',
+      start: true,
+      addOptions: ['--incognito', '--start-maximized'],
+      webDriverSession: { desiredCapabilities: { browserName: 'chrome' } }
+    }
+    """
+  * configure driver = options
+```
+
+---
+
+問題 2: 我有在無痕模式下擁有 token,如果是新開一個 driver 有辦法吃到嗎？
+---
+
+回答:
+無痕模式本身就是為了隔離資料,預設情況下無法在新的 driver 實例中共享 token 或 cookies。
+
+解決方案:
+
+方案 1: 使用 sessionId 重用瀏覽器會話
+```gherkin
+Background:
+  * configure driver = { type: 'chrome', addOptions: ['--incognito'] }
+  * driver 'https://your-app.com'
+  # 登入並取得 token
+  * def sessionId = driver.sessionId
+  
+Scenario: 第二個測試
+  # 重用同一個 browser session
+  * configure driver = { type: 'chrome', webDriverSession: { sessionId: '#(sessionId)' } }
+```
+
+方案 2: 手動儲存並注入 Token/Cookies
+```gherkin
+Scenario: 取得 token 並儲存
+  Given driver 'https://your-app.com/login'
+  # 登入流程
+  * def token = driver.script("return localStorage.getItem('token')")
+  * def cookies = driver.cookies
+  
+Scenario: 新 driver 使用儲存的 token
+  Given driver 'https://your-app.com'
+  * driver.script("localStorage.setItem('token', '" + token + "')")
+  * cookies.forEach(function(c){ driver.cookie(c) })
+  * driver.refresh()
+```
+
+方案 3: 在同一個 Scenario 中完成所有操作
+```gherkin
+Scenario: 一次性完成測試流程
+  * configure driver = { type: 'chrome', addOptions: ['--incognito'] }
+  Given driver 'https://your-app.com/login'
+  # 登入後直接在同一個 driver 中繼續測試
+  Then driver 'https://your-app.com/dashboard'
+```
+
+最佳實踐:
+1. 避免跨 driver 實例共享
+2. 使用 Background 統一初始化
+3. 如果必須重新開啟,將 token/cookies 儲存為變數後注入
+
+---
+
+問題 3: 我現在是擁有一個有 token 的無痕模式網頁,我想要我測試打開的 driver 能夠吃到,有辦法嗎？
+---
+
+回答:
+可以!需要使用遠端 WebDriver 的方式連接到現有的瀏覽器實例。
+
+方案: 使用 Chrome Remote Debugging
+
+步驟 1: 以除錯模式啟動 Chrome 無痕視窗
+```bash
+# macOS
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+  --remote-debugging-port=9222 \
+  --incognito \
+  --user-data-dir=/tmp/chrome-debug
+
+# Windows
+chrome.exe --remote-debugging-port=9222 --incognito --user-data-dir=C:\temp\chrome-debug
+```
+
+步驟 2: 在瀏覽器中手動登入並取得 token
+
+步驟 3: Karate 連接到現有瀏覽器
+```gherkin
+Feature: 連接到現有瀏覽器
+
+Background:
+  * configure driver = 
+    """
+    {
+      type: 'chrome',
+      start: false,
+      webDriverUrl: 'http://localhost:9222'
+    }
+    """
+
+Scenario: 使用現有 session 測試
+  Given driver 'https://your-app.com/dashboard'
+  # 現在可以直接使用,token 已經存在
+  Then match driver.title == 'Dashboard'
+```
+
+---
+
+問題 4: 我使用的是 Windows
+---
+
+回答:
+Windows 完整操作步驟:
+
+步驟 1: 找到 Chrome 執行檔
+通常在: C:\Program Files\Google\Chrome\Application\chrome.exe
+
+步驟 2: 以除錯模式啟動 Chrome
+
+方法 A: 使用命令提示字元 (CMD)
+```cmd
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --incognito --user-data-dir=C:\temp\chrome-debug
+```
+
+方法 B: 使用 PowerShell
+```powershell
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --incognito --user-data-dir=C:\temp\chrome-debug
+```
+
+方法 C: 建立桌面捷徑 (最方便)
+1. 桌面右鍵 → 新增 → 捷徑
+2. 輸入上述指令
+3. 命名為 "Chrome Debug"
+4. 之後直接點擊捷徑啟動
+
+步驟 3: 手動登入取得 token
+
+步驟 4: Karate 連接
+```gherkin
+Background:
+  * configure driver = 
+    """
+    {
+      type: 'chrome',
+      start: false,
+      webDriverUrl: 'http://localhost:9222'
+    }
+    """
+```
+
+驗證連接是否成功:
+訪問 http://localhost:9222/json 應該會看到 JSON 回應
+
+常見問題排解:
+1. 埠號 9222 已被佔用:
+   ```cmd
+   netstat -ano | findstr :9222
+   taskkill /PID <pid> /F
+   ```
+2. 找不到 chrome.exe: 使用 `where chrome` 找路徑
+3. 權限問題: 確保 C:\temp\chrome-debug 資料夾存在且可寫入
+
+---
+
+建立的範例檔案:
+---
+
+1. connect-existing-browser.feature - Karate 測試檔案
+2. start-chrome-debug.bat - 啟動 Chrome 除錯模式的批次檔
+3. verify-connection.bat - 驗證連接的批次檔
+4. README.md - 完整使用說明文件
+
+關鍵配置:
+```gherkin
+* configure driver = 
+  """
+  {
+    type: 'chrome',
+    start: false,              # 不啟動新瀏覽器
+    webDriverUrl: 'http://localhost:9222'  # 連接到現有瀏覽器
+  }
+  """
+```
+
+重要參數說明:
+- --remote-debugging-port=9222: 開啟遠端除錯埠
+- --incognito: 以無痕模式啟動
+- --user-data-dir=C:\temp\chrome-debug: 使用獨立的使用者資料目錄
+
+取得瀏覽器中的 Token:
+```gherkin
+# 從 localStorage 取得
+* def token = driver.script("return localStorage.getItem('token')")
+
+# 從 cookies 取得
+* def cookies = driver.cookies
+
+# 從 sessionStorage 取得
+* def sessionToken = driver.script("return sessionStorage.getItem('token')")
+```
+
+---
+
+總結:
+---
+
+1. Karate 可以透過 addOptions: ['--incognito'] 啟動無痕模式
+2. 要連接到已有 token 的瀏覽器,需使用 Chrome Remote Debugging
+3. Windows 上透過命令列或批次檔啟動 Chrome 除錯模式
+4. Karate 設定 start: false 和 webDriverUrl 來連接現有瀏覽器
+5. 驗證連接: http://localhost:9222/json
+
+這樣就能讓 Karate 測試使用已經有 token 的無痕瀏覽器了!
